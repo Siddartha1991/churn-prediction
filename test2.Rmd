@@ -1,6 +1,7 @@
 ---
-title: "Untitled"
+title: "Churn Prediction"
 output: github_document
+author: Siddartha Rao Chennur
 ---
 
 ```{r setup, include=FALSE}
@@ -13,18 +14,739 @@ This is an R Markdown format used for publishing markdown documents to GitHub. W
 
 ## Including Code
 
-You can include R code in the document as follows:
+Reading data
 
-```{r cars}
-summary(cars)
+```{r churn data}
+training.data.raw <- read.csv('C:/Users/Siddartha/Documents/R/WA_Fn-UseC_-Telco-Customer-Churn.csv',header=T,na.strings=c(""))
+#training.data.raw
+```
+data description
+```{r }
+#library(Ecdat)
+summary(training.data.raw)
 ```
 
-## Including Plots now
 
-You can also embed plots, for example:
 
-```{r pressure, echo=FALSE}
-plot(pressure)
+##Missing data handling
+missing data handling by mean replacement
+```{r}
+sapply(training.data.raw,function(x) sum(is.na(x)))
+training.data.raw$TotalCharges[is.na(training.data.raw$TotalCharges)] <- mean(training.data.raw$TotalCharges,na.rm=T)
+
 ```
+
+##Skewness
+skewness of monthly charges and total charges
+```{r skewness}
+library(moments)
+skewness((training.data.raw$MonthlyCharges)^1.5)
+skewness((training.data.raw$TotalCharges)^(0.31))
+
+```
+Doing trial and error to get the best transformation for skewness:
+different skewness values for different transformations: X - Totalcharges
+simple X : 0.96 too positively skewed
+1/(X) : 3.77 too high
+1/X^2 : 5.37 too high
+sqrt(X) : 0.30
+X^2 : 1.82
+X^(0.31) : -0.03
+
+## Including Plots
+
+Plots for Total Charges; before and after applying skewness:
+
+```{r skewness check, echo=FALSE}
+library(ggplot2)
+qplot((training.data.raw$TotalCharges), geom = 'histogram', binwidth = 3) + xlab('Total_charges')
+qplot((training.data.raw$TotalCharges)^0.31, geom = 'histogram', binwidth = 0.1) + xlab('Total_charges_after_transformation')
+
+```
+Looking at above plot we have reduced the skewness but it needs to be observed that Total charges variable has **J-shaped distribution**
+looks like we have reduced skewness for by boxcox transformation techniques but what about *normality?*
+
+Plots for Monthly Charges; before and after applying skewness:
+
+```{r, echo=FALSE}
+
+qplot((training.data.raw$MonthlyCharges), geom = 'histogram', binwidth = 1) + xlab('Monthly_charges')
+qplot((training.data.raw$MonthlyCharges)^1.5, geom = 'histogram', binwidth = 1) + xlab('Monthly_charges_after_transformation')
+
+```
+
+```{r}
+qplot((training.data.raw$tenure), geom = 'histogram', binwidth = 1) + xlab('Monthly_charges')
+#qplot((training.data.raw$MonthlyCharges)^1.5, geom = 'histogram', binwidth = 1) + #xlab('Monthly_charges_after_transformation')
+```
+
+##Lets do some normality checks!!!
+#For Total_Charges
+
+#Quantile-Quantile plot
+```{r}
+qqnorm(training.data.raw$TotalCharges)
+qqline(training.data.raw$TotalCharges, col = "red")
+
+#next, lets apply for data after reducing skewness
+qqnorm(log(training.data.raw$TotalCharges)^0.31)
+qqline(log(training.data.raw$TotalCharges)^0.31, col = "red")
+```
+
+above plot doesnt quite look normal - because data not passing through zero
+still could not find any significant differences to say it is normal data.
+
+#now lets check for monthly charges data
+#Quantile-Quantile plot
+```{r}
+qqnorm(log(training.data.raw$MonthlyCharges))
+qqline(log(training.data.raw$MonthlyCharges), col = "red")
+
+#above plot doesnt quite look normal
+#next, lets applied for data after reducing skewness
+
+qqnorm((training.data.raw$MonthlyCharges)^1.5)
+qqline((training.data.raw$MonthlyCharges)^1.5, col = "red")
+```
+
+still could not find any significant differences to say it is normal data.
+
+now lets try out another common test
+Anderson-Darling Normality Test
+
+```{r}
+library(nortest)
+ad.test((training.data.raw$TotalCharges)^0.31)
+
+ad.test((training.data.raw$MonthlyCharges)^1.5)
+
+```
+
+pvalue<0.05 - for both variables - reject null hypo - data not normally distributed
+So we can conclude using qq plots and AD normality test that data is not normally distributed even after reducing skewness.
+
+#plotting between tenure and montlycharges
+
+```{r}
+#count plot
+ggplot(training.data.raw) + geom_bar( aes(training.data.raw$tenure) )
+#mean plot
+ggplot(training.data.raw, aes(x=factor(training.data.raw$tenure), y=training.data.raw$MonthlyCharges)) + stat_summary(fun.y="mean", geom="bar")
+
+```
+
+note: Can see a slight linear relationship between them
+
+#SENIOR CITIZEN
+
+senior citizen vs montly charges:
+```{r}
+ggplot(training.data.raw, aes(x=(training.data.raw$SeniorCitizen), y=training.data.raw$MonthlyCharges)) + stat_summary(fun.y="mean", geom="bar")
+aggregate( training.data.raw$MonthlyCharges~training.data.raw$SeniorCitizen, training.data.raw, mean )
+
+```
+
+note: looks senior citizens have significant mean monthly average difference
+#senior citizen vs churn:
+doing the **CHI-SQUARE** test:
+
+```{r}
+two_way_table <- table(training.data.raw$SeniorCitizen,training.data.raw$Churn)
+two_way_table
+
+sc_chi = chisq.test(training.data.raw$SeniorCitizen,training.data.raw$Churn, correct=FALSE)
+sc_chi$residuals
+sc_chi
+
+
+```
+with p value so less - we are rejecting null hypo and say SC and Churn are dependent.
+p < 0.05 
+now that we have established dependence - what is the strength of this relationship?
+as this is a case control study - retrospective - we look at **odds ratio**.
+
+```{r}
+library(epitools)
+epitab(two_way_table,method="oddsratio")
+
+```
+
+so senior citizens are 2.31 times likely to get churned than non senior citizens
+do we have any confounder variable effecting these results?
+
+did t test and f test below but montly_charges data is *not normally distributed*
+F- test to verify homoskedasticity (homogeneity of variances). 
+
+
+```{r}
+sc <- training.data.raw[ which(training.data.raw$SeniorCitizen==1),]
+sc_not <- training.data.raw[ which(training.data.raw$SeniorCitizen==0),]
+
+var.test(sc$MonthlyCharges,sc_not$MonthlyCharges)
+```
+
+#Z-test as variances are known
+
+```{r}
+z.test2sam = function(a, b, var.a, var.b){
+  n.a = length(a)
+  n.b = length(b)
+  zeta = (mean(a) - mean(b)) / (sqrt(var.a/n.a + var.b/n.b))
+  return(zeta)
+}
+
+z.test2sam(sc$MonthlyCharges, sc_not$MonthlyCharges, 564.729, 919.0623)
+var(sc$MonthlyCharges)
+var(sc_not$MonthlyCharges)
+
+t.test(sc$MonthlyCharges, sc_not$MonthlyCharges)
+```
+22.28828 - p:value < 0.00001 - mean difference is significant.
+
+#CONTRACT
+creating two way table between contract and churn:
+```{r}
+two_way_table_1 <- table(training.data.raw$Contract,training.data.raw$Churn)
+two_way_table_1
+```
+initial looks say that - month-month people have high chance of churn but lets find out
+now- try to find the significance using chi-square test:
+```{r}
+sc_chi = chisq.test(training.data.raw$Contract,training.data.raw$Churn, correct=FALSE)
+sc_chi
+```
+we reject null hypothesis - Looks like there is dependence between above two
+but i will check if senior citizens are in long term plans or short term plans?
+```{r}
+two_way_table_1 <- table(training.data.raw$Contract,training.data.raw$SeniorCitizen)
+two_way_table_1
+
+```
+
+
+*CHISQ* test for SC and contract
+```{r}
+
+sc_chi = chisq.test(training.data.raw$Contract,training.data.raw$SeniorCitizen, correct=FALSE)
+sc_chi
+
+```
+**3- way table**
+drawing three way tables for better understanding -sc + contract ~ churn
+
+```{r}
+library(reshape2)
+
+
+
+```
+
+# three way table conclusions:
+we already know senior citizens have tendency to churn more than non senior but,
+most of churn in non senior citizens is about month-month contract - which is quite **interesting!!!**
+looks like non senior citizens and senior citizens both, taking month-month contract have significant chance of churn
+ out of 0.42 chance of churn in month to month contract - for non senior citizens , tendency to churn is 0.39 and senior citizens it is 0.56
+people using month-month package are having some difficulties facing?
+what are they? are any of services not so good? or their payment methods tedious for them? or monthly charges too high?
+Lets find out!!!
+```{r}
+df <- as.data.frame(table(training.data.raw$SeniorCitizen,training.data.raw$Contract,training.data.raw$Churn))
+
+
+dcast(df, training.data.raw$SeniorCitizen + training.data.raw$Contract ~training.data.raw$Churn)
+```
+
+
+
+
+
+```{r}
+ggplot(training.data.raw, aes(x=(training.data.raw$Contract), y=training.data.raw$MonthlyCharges)) + stat_summary(fun.y="mean", geom="bar")
+aggregate( training.data.raw$MonthlyCharges~training.data.raw$Contract, training.data.raw, mean )
+
+
+```
+
+
+All three contract methods have similar monthly_charges: no big differences
+
+Next,  lets check for monthly charges and only non-senior citizens:
+```{r}
+sc_not <- training.data.raw[ which(training.data.raw$SeniorCitizen==0),]
+ggplot(sc_not, aes(x=(sc_not$Contract), y=sc_not$MonthlyCharges)) + stat_summary(fun.y="mean", geom="bar")
+# make no sense; 
+# mean of monthly charges as a whole is 64.76
+```
+
+ from graph monthly charges for month-month package in non sc - is 62 approx
+which is not bad: so monthly package may not be the reason why non SC are churning out!
+
+
+#Payment method:
+First, we will start with two way table between payment methods and churn
+Below we can see, significant churn in *electronic-checks* payment methods
+45% of people in electronic check payment method are prone to churn
+```{r}
+two_way_table_2 <- table(training.data.raw$PaymentMethod,training.data.raw$Churn)
+two_way_table_2
+#adding marigins to contingency table
+Add = addmargins(two_way_table_2)
+Add
+
+```
+
+Looking if electronic check method people have high monthly charges:
+
+```{r}
+aggregate( training.data.raw$MonthlyCharges~training.data.raw$PaymentMethod, training.data.raw, mean )
+ggplot(training.data.raw, aes(x=(training.data.raw$PaymentMethod), y=training.data.raw$MonthlyCharges)) + stat_summary(fun.y="mean", geom="bar")
+
+```
+
+*YES!!!* they do have high monthly charges - so can electronic check be a confounder and is there a more valid reason for their high charges? needs to be analyzed :
+
+
+ four way table - contract,senior citizen,paymentmethod,churn
+```{r}
+
+df <- as.data.frame(table(training.data.raw$SeniorCitizen,training.data.raw$PaymentMethod,training.data.raw$Contract,training.data.raw$Churn))
+library(reshape2)
+dcast(df, training.data.raw$Contract + training.data.raw$SeniorCitizen + training.data.raw$PaymentMethod ~training.data.raw$Churn)
+
+```
+
+Conclusions till now:
+1) senior citizens have churn percent of 40%, they are 2.3 times likely to be in churn
+2) month-month contract has huge churn in particular - most of churn in non senior citizens 88% of churn in non senior citizens is in month to month contracts
+3)payment methods - electronic payments seem to have high monthly charges($76) compared to others and mean(64). 
+4)tracing back again - churn for non senior citizens looks to lie in month to month contracts in that significant amount tends to be in electronic check payment method
+5)Talking numbers:
+- churn in non-senior citizens:(23% of total churn)1400 of 5900
+- most of it is in month - month contract - 1200/1400 - 88%
+- most of that tends to be associated to electronic check payment methods - 76$monthly charges(18$ higher than mean)
+- 51% of that churn seen in electronic check payment methods for monthly- monthly contracts
+- if total churn in month-month is around 1655/(2220+1655) - 42%, most of it is caused due to electronic paychecks: 690+304 - 994 - 60% of 1655
+- one more point to be noted is 92% ( 441/ 476 ) of churn in senior citizens can be seen in month - month contracts
+
+
+
 
 Note that the `echo = FALSE` parameter was added to the code chunk to prevent printing of the R code that generated the plot.
+
+
+
+##Logistic Regression
+
+```{r}
+skewd_mc = training.data.raw$MonthlyCharges^1.5
+model <- glm(training.data.raw$Churn ~  training.data.raw$Contract + training.data.raw$PaymentMethod  + training.data.raw$SeniorCitizen + skewd_mc ,family=binomial(link='logit'),data=training.data.raw)
+summary(model)
+
+
+```
+
+```{r}
+anova(model, test="Chisq")
+```
+What I want to understand here is - whether means of all payment methods other than electronic check have similar means - so that i could combine them into level.
+From below chi sq test only checking for three levels excluding electronic check -  It looks like We have to reject null hypothesis at 95% confidence level - so it does make sense to keep them together, they are significantly related with churn.
+Also tried merging three levels to one- p-value is more significant now. but it makes more sense to keep all of them.
+- but important point to understand is -  electronic check payment method having significant effect on churn
+
+```{r}
+#sc_not <- training.data.raw[ which(training.data.raw$PaymentMethod=='Bank transfer (automatic)' | training.data.raw$PaymentMethod == 'Mailed check' | training.data.raw$PaymentMethod == 'Credit card (automatic)'),]
+#dim(sc_not)
+#sc_chi = chisq.test(sc_not$PaymentMethod,sc_not$Churn, correct=FALSE)
+head(training.data.raw$PaymentMethod)
+levels(training.data.raw$PaymentMethod) =c("A","A","B","A")
+#training.data.raw[ which(training.data.raw$PaymentMethod=='B') ,]
+levels(training.data.raw$PaymentMethod)
+```
+
+```{r}
+sc_chi = chisq.test(training.data.raw$PaymentMethod,training.data.raw$Churn, correct=FALSE)
+sc_chi
+```
+##PaperlessBilling
+```{r}
+
+two_way_table_3 <- table(training.data.raw$PaperlessBilling,training.data.raw$Churn)
+two_way_table_3
+aggregate( training.data.raw$MonthlyCharges~training.data.raw$PaperlessBilling, training.data.raw, mean )
+
+sc_chi = chisq.test(training.data.raw$PaperlessBilling,training.data.raw$Churn, correct=FALSE)
+sc_chi
+```
+
+```{r}
+df <- as.data.frame(table(training.data.raw$PaperlessBilling,training.data.raw$SeniorCitizen,training.data.raw$Churn))
+dcast(df, training.data.raw$SeniorCitizen + training.data.raw$PaperlessBilling ~training.data.raw$Churn)
+```
+
+```{r}
+two_way_table_3 <- table(training.data.raw$gender,training.data.raw$Churn)
+two_way_table_3
+aggregate( training.data.raw$MonthlyCharges~training.data.raw$gender, training.data.raw, mean )
+
+sc_chi = chisq.test(training.data.raw$gender,training.data.raw$Churn, correct=FALSE)
+sc_chi
+```
+
+```{r}
+two_way_table_3 <- table(training.data.raw$Partner,training.data.raw$Churn)
+two_way_table_3
+aggregate( training.data.raw$MonthlyCharges~training.data.raw$Partner, training.data.raw, mean )
+
+sc_chi = chisq.test(training.data.raw$Partner,training.data.raw$Churn, correct=FALSE)
+sc_chi
+```
+
+```{r}
+two_way_table_3 <- table(training.data.raw$Dependents,training.data.raw$Churn)
+two_way_table_3
+aggregate( training.data.raw$MonthlyCharges~training.data.raw$Dependents, training.data.raw, mean )
+
+sc_chi = chisq.test(training.data.raw$Dependents,training.data.raw$Churn, correct=FALSE)
+sc_chi
+```
+
+
+
+#Tenure variable:
+
+lets see how tenure works with respect to churn:
+* first drawing plot histograms for tenure customers
+* next plot histogram for tenure customers with churn
+
+
+
+
+```{r}
+qplot((training.data.raw$tenure), geom = 'histogram', binwidth = 1) + xlab('churn')
+sc <- training.data.raw[ which(training.data.raw$Churn=="Yes"),]
+
+
+qplot((sc$tenure), geom = 'histogram', binwidth = 1) + xlab('churn')
+
+#finding ratio of people leaving from each tenure group
+
+
+
+```
+
+* From above graphs we can observe lot of churn in customers newly joined and less churn in long stayed customers-
+* So average churn in first few months of joining the company and understanding why we are seeing high churn rate for those customers in particular may let us to more conclusions on churn rate---)
+```{r}
+#xyz  = sc$tenure/training.data.raw$tenure
+library(plyr)
+all_tenure_count = count(training.data.raw, 'tenure')
+all_tenure_count = all_tenure_count[-c(1),]
+churn_tenure_count = count(sc,'tenure')
+churn_tenure_count['churn_ratio'] = churn_tenure_count$freq / all_tenure_count$freq
+churn_tenure_count['total_customer_in_tenure'] = all_tenure_count$freq
+churn_tenure_count['non_churn_freq'] = all_tenure_count$freq - churn_tenure_count$freq
+(churn_tenure_count)
+#tail(churn_tenure_count)
+```
+* First lets find out the average churn rate in first 20 months of joining the company.
+```{r}
+
+below_20 = (churn_tenure_count[which(churn_tenure_count['tenure'] < 24),]['churn_ratio'])
+below_40 = (churn_tenure_count[which(churn_tenure_count['tenure'] < 36),]['churn_ratio'])
+above_40 = (churn_tenure_count[which(churn_tenure_count['tenure'] > 48),]['churn_ratio'])
+
+sapply(below_40,mean)
+sapply(below_20,mean) 
+sapply(above_40,mean) 
+
+
+tot_below_24 = (training.data.raw[which(training.data.raw['tenure'] < 24),])
+tot_above_48 = (training.data.raw[which(training.data.raw['tenure'] > 48),])
+
+```
+
+* from above results , it can be observed that churn ratio is around 30 - 40% for the newly joined customers(first year and second year)
+*  it has reduced considerably for customer tenures ranging from ( + 3 years) - can be termed loyal customers
+
+#MultipleLines variable
+
+```{r}
+tot_below_24 = (training.data.raw[which(training.data.raw['tenure'] < 24),])
+tot_above_48 = (training.data.raw[which(training.data.raw['tenure'] > 48),])
+
+two_way_table_3 <- table(tot_below_24$MultipleLines,tot_below_24$Churn)
+two_way_table_3
+
+two_way_table_3 <- table(tot_above_48$MultipleLines,tot_above_48$Churn)
+two_way_table_3
+
+```
+* we can see  high churn rate in multiplelines service - below < 24 months
+* also it is extremely high for < 12 month tenure customers
+* and finally very low rate with > 48 month tenure customers
+* we can dig more deep into why multiple line service is so unpopular and leading to high churn rate when taken.
+* < 12 month tenure : churn rate - 65%
+* < 24 month tenure : churn rate - 55%
+
+* running chi square tests 
+```{r}
+aggregate( tot_below_24$MonthlyCharges~tot_below_24$MultipleLines, tot_below_24, mean )
+aggregate( tot_above_48$MonthlyCharges~tot_above_48$MultipleLines, tot_above_48, mean )
+sc_chi = chisq.test(tot_below_24$MultipleLines,tot_below_24$Churn, correct=FALSE)
+sc_chi
+```
+
+* we can see high monthly rates for customers with multiple lines service
+* if the service is not given on time or not of good quality - that might have lead to high churn 
+* also looking at the multiplelines service of other competitors for better pricing would be a good thot to move forward with
+* expectedly , chi square test has said good significant dependency.
+
+##Internet service variable:
+
+```{r}
+tot_below_24 = (training.data.raw[which(training.data.raw['tenure'] < 24),])
+tot_above_48 = (training.data.raw[which(training.data.raw['tenure'] > 48),])
+
+two_way_table_3 <- table(tot_below_24$InternetService,tot_below_24$Churn)
+addmargins(two_way_table_3)
+
+epitab(two_way_table_3,method="oddsratio")
+
+two_way_table_3 <- table(tot_above_48$InternetService,tot_above_48$Churn)
+addmargins(two_way_table_3)
+```
+
+```{r}
+aggregate( tot_below_24$MonthlyCharges~tot_below_24$InternetService, tot_below_24, mean )
+aggregate( tot_above_48$MonthlyCharges~tot_above_48$InternetService, tot_above_48, mean )
+sc_chi = chisq.test(tot_below_24$InternetService,tot_below_24$Churn, correct=FALSE)
+sc_chi
+
+```
+
+* < 12 month tenure - 70% churn rate with FiberOptic users need
+* < 24 month tenure - 63% churn rate with FiberOptic users need severe attention
+* > 48 month tenure - 17% churn rate in loyal customers too..
+* fiber optic cable pricing is higher compared to average customers - 30% and 56% more than average monthly_charges
+* and significant difference to customers not using internet - charging 415% and 454% more!!!
+* also odds ratio state that - fiber optic using customers are *three* times more prone to churn than dsl using customer
+
+##OnlineSecurity
+```{r}
+
+tot_below_24 = (training.data.raw[which(training.data.raw['tenure'] < 24),])
+tot_above_48 = (training.data.raw[which(training.data.raw['tenure'] > 48),])
+
+two_way_table_3 <- table(tot_below_24$OnlineSecurity,tot_below_24$Churn)
+addmargins(two_way_table_3)
+
+two_way_table_3 <- table(tot_above_48$OnlineSecurity,tot_above_48$Churn)
+addmargins(two_way_table_3)
+```
+
+* does look like opted by people during later time of their tenure
+* significant churn when not using onlinesecurity is weird - some other variable may have its influence here
+
+
+```{r}
+aggregate( tot_below_24$MonthlyCharges~tot_below_24$OnlineSecurity, tot_below_24, mean )
+aggregate( tot_above_48$MonthlyCharges~tot_above_48$OnlineSecurity, tot_above_48, mean )
+sc_chi = chisq.test(tot_below_24$OnlineSecurity,tot_below_24$Churn, correct=FALSE)
+sc_chi
+
+df <- as.data.frame(table(tot_below_24$OnlineSecurity,tot_below_24$InternetService,tot_below_24$Churn))
+dcast(df, tot_below_24$OnlineSecurity + tot_below_24$InternetService ~tot_below_24$Churn)
+
+```
+* no significant mean differences between them - effect in this may be a cause of any other variable
+* looking at three way table with internet service - it can be said that most of the churn explainations in online security might be a cause of Internet service variable and not by online security itself.
+
+
+##Online backup variable:
+
+```{r}
+tot_below_24 = (training.data.raw[which(training.data.raw['tenure'] < 24),])
+tot_above_48 = (training.data.raw[which(training.data.raw['tenure'] > 48),])
+
+two_way_table_3 <- table(tot_below_24$OnlineBackup,tot_below_24$Churn)
+addmargins(two_way_table_3)
+
+two_way_table_3 <- table(tot_above_48$OnlineBackup,tot_above_48$Churn)
+addmargins(two_way_table_3)
+```
+```{r}
+aggregate( tot_below_24$MonthlyCharges~tot_below_24$OnlineBackup, tot_below_24, mean )
+aggregate( tot_above_48$MonthlyCharges~tot_above_48$OnlineBackup, tot_above_48, mean )
+sc_chi = chisq.test(tot_below_24$OnlineBackup,tot_below_24$Churn, correct=FALSE)
+sc_chi
+
+df <- as.data.frame(table(tot_below_24$OnlineBackup,tot_below_24$InternetService,tot_below_24$Churn))
+dcast(df, tot_below_24$OnlineBackup + tot_below_24$InternetService ~tot_below_24$Churn)
+```
+
+ similar conclusions like on online security can be made on online backup
+
+#device protection
+```{r}
+tot_below_24 = (training.data.raw[which(training.data.raw['tenure'] < 24),])
+tot_above_48 = (training.data.raw[which(training.data.raw['tenure'] > 48),])
+
+two_way_table_3 <- table(tot_below_24$DeviceProtection,tot_below_24$Churn)
+addmargins(two_way_table_3)
+
+two_way_table_3 <- table(tot_above_48$DeviceProtection,tot_above_48$Churn)
+addmargins(two_way_table_3)
+```
+```{r}
+aggregate( tot_below_24$MonthlyCharges~tot_below_24$DeviceProtection, tot_below_24, mean )
+aggregate( tot_above_48$MonthlyCharges~tot_above_48$DeviceProtection, tot_above_48, mean )
+sc_chi = chisq.test(tot_below_24$DeviceProtection,tot_below_24$Churn, correct=FALSE)
+sc_chi
+
+df <- as.data.frame(table(tot_below_24$DeviceProtection,tot_below_24$InternetService,tot_below_24$Churn))
+dcast(df, tot_below_24$DeviceProtection + tot_below_24$InternetService ~tot_below_24$Churn)
+
+```
+
+```{r}
+tot_below_24 = (training.data.raw[which(training.data.raw['tenure'] < 24),])
+tot_above_48 = (training.data.raw[which(training.data.raw['tenure'] > 48),])
+
+two_way_table_3 <- table(tot_below_24$TechSupport,tot_below_24$Churn)
+addmargins(two_way_table_3)
+
+two_way_table_3 <- table(tot_above_48$TechSupport,tot_above_48$Churn)
+addmargins(two_way_table_3)
+```
+
+Looking at all the variables after internet service - they seem to be affected by the internet service but do not have any significant impact and do not give any insights on why churn is happening: "OnlineSecurity"   "OnlineBackup"     "DeviceProtection" "TechSupport" "StreamingTV"      "StreamingMovies" 
+ * so far doing the statistical analysis - it can be said that internet service, multiple lines, contract, tenure and senior citizen are having a good impact on why churn is happening in the customers.
+ * next we will do some cluster analysis to better understand what are the major causes for the churn - a total effect
+ * also by  drawing conclusions from below logistic model we can see that for customer below <years tenure -  where the majority of churn lies above mentioned variables play a major role
+
+```{r}
+skewd_mc = tot_below_24$MonthlyCharges^1.5
+
+model <- glm(tot_below_24$Churn ~ . ,family=binomial(link='logit'),data=tot_below_24)
+summary(model)
+anova(model,test='Chisq')
+
+```
+##basic clustering analysis: k-means algorithm:
+
+```{r}
+# taking churn  into a new variable
+churn = tot_below_24['Churn']
+tot_below_24 = tot_below_24[-c(19)]
+names(tot_below_24)
+```
+graph to see number of clusters, works for continous data only
+```{r}
+
+library(ggplot2)
+ggplot(training.data.raw, aes(training.data.raw$MonthlyCharges,training.data.raw$TotalCharges, color = training.data.raw$Churn)) + geom_point()
+
+```
+
+```{r}
+tot_below_241 = (training.data.raw[which(training.data.raw['tenure'] < 24),])
+tot_below_242 = (training.data.raw[which(training.data.raw['tenure'] > 48),])
+tot_below_24 = rbind(tot_below_241,tot_below_242)
+cluster_data = tot_below_24[c(3,8,9,16)]
+#cluster_data = tot_below_24[c(9)]
+names(tot_below_24)
+#doing one hot encoding
+#ohe_feats = c('InternetService')
+ohe_feats = c('SeniorCitizen','MultipleLines','InternetService','Contract')
+library(ade4)
+for (f in ohe_feats){
+  df_all_dummy = acm.disjonctif(cluster_data[f])
+  cluster_data[f] = NULL
+  cluster_data = cbind(cluster_data, df_all_dummy)
+}
+cluster_data['tenure'] = tot_below_24['tenure']
+cluster_data['MonthlyCharges'] = tot_below_24['MonthlyCharges']
+head(cluster_data)
+
+```
+
+```{r}
+set.seed(20)
+kCluster <- kmeans(cluster_data, 2, nstart = 20)
+
+
+```
+
+```{r}
+
+```
+
+```{r}
+library(dbscan)
+library(fpc)
+dbscan::kNNdistplot(cluster_data, k =  5)
+#abline(h = 0.4, lty = 2)
+
+```
+
+```{r}
+set.seed(123)
+# fpc package
+res.fpc <- fpc::dbscan(cluster_data, eps = 5, MinPts =5)
+# dbscan package
+res.db <- dbscan::dbscan(cluster_data, 4, 5)
+```
+
+```{r}
+library(factoextra)
+fviz_cluster(res.fpc, cluster_data,stand = FALSE, frame = FALSE, geom = "point")
+
+addmargins(table(kCluster$cluster,tot_below_24$Churn))
+
+tot_below_24['cluster'] = kCluster$cluster
+```
+
+```{r}
+tot_below_243 = (tot_below_24[which(tot_below_24['tenure'] < 24),])
+tot_below_244 = (tot_below_24[which(tot_below_24['tenure'] > 48),])
+```
+
+```{r}
+x = (tot_below_243[which(tot_below_243['cluster'] == 1),])
+dim(x)
+
+library(ggplot2)
+ggplot(tot_below_24, aes(tot_below_24$MonthlyCharges,tot_below_24$tenure, color = tot_below_24$cluster)) + geom_point()
+```
+
+```{r}
+library(arules)
+library(arulesViz)
+
+data = tot_below_24[c(7,8,9,10,11,12,13,14,15)]
+names(data)
+
+rules = apriori(data, parameter=list(support=0.3, confidence=0.6));
+rules;
+```
+
+```{r}
+inspect(head(sort(rules, by="lift"),35));
+ 
+plot(rules);
+ 
+head(quality(rules));
+ 
+plot(rules, measure=c("support","lift"), shading="confidence");
+ 
+plot(rules, shading="order", control=list(main ="Two-key plot"));
+```
+
+```{r}
+sel = plot(rules, measure=c("support","lift"), shading="confidence", interactive=TRUE);
+ 
+subrules = rules[quality(rules)$confidence > 0.8];
+ 
+subrules
+```
+
